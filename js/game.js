@@ -287,13 +287,13 @@ class Game {
         this.gameLoop();
     }
 
-    startPracticeMode() {
+    startPracticeMode(blueBotCount = 5, redBotCount = 5) {
         this.start();
-        this.spawnBots(5);
-        this.hud.showCenterMessage('5v5 练习模式', 2000);
+        this.spawnBots(blueBotCount, redBotCount);
+        this.hud.showCenterMessage(`${blueBotCount + 1}v${redBotCount} 练习模式`, 2000);
     }
 
-    spawnBots(count) {
+    spawnBots(blueBotCount = 5, redBotCount = 5) {
         const strategies = ['aggressive', 'defensive', 'balanced', 'flanker', 'aggressive'];
 
         // 扩展的巡逻点 - 覆盖整个地图（包括边缘走廊）
@@ -322,8 +322,8 @@ class Game {
             new THREE.Vector3(6, 1.8, 6)
         ];
 
-        // 生成敌人
-        for (let i = 0; i < count; i++) {
+        // 生成敌人 (红队)
+        for (let i = 0; i < redBotCount; i++) {
             const spawnPoint = this.map.getRandomSpawnPoint('red');
             const strategy = strategies[i % strategies.length];
             const enemy = new Bot(this.scene, spawnPoint, 'red', strategy, this.map);
@@ -332,8 +332,8 @@ class Game {
             this.enemies.push(enemy);
         }
 
-        // 生成队友
-        for (let i = 0; i < count; i++) {
+        // 生成队友 (蓝队)
+        for (let i = 0; i < blueBotCount; i++) {
             const spawnPoint = this.map.getRandomSpawnPoint('blue');
             const strategy = strategies[(i + 2) % strategies.length];
             const ally = new Bot(this.scene, spawnPoint, 'blue', strategy, this.map);

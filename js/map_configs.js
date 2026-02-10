@@ -813,7 +813,8 @@ function getMapList() {
         id: config.id,
         name: config.name,
         description: config.description,
-        thumbnail: config.thumbnail
+        thumbnail: config.thumbnail,
+        size: config.size
     }));
 }
 

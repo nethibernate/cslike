@@ -1,7 +1,9 @@
 // FrostBite Arena - 主入口
 let game = null;
-let selectedMapId = 'fy_iceworld'; // 默认选择冰雪世界
+let selectedMapId = null; // 选择的地图
 let gameMode = 'single'; // 'single', 'practice', 'multiplayer'
+let blueBotCount = 5;
+let redBotCount = 5;
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -71,28 +73,118 @@ function initializeMapSelection() {
     const mapListEl = document.getElementById('map-list');
     const maps = getMapList();
 
-    mapListEl.innerHTML = maps.map(map => `
-        <div class="map-card" data-map-id="${map.id}">
-            <div class="map-thumbnail ${map.id}">🗺️</div>
-            <div class="map-info">
-                <h3>${map.name}</h3>
-                <p>${map.description}</p>
+    // 生成左侧地图列表 (小缩略图 + 名称 + 尺寸标签)
+    mapListEl.innerHTML = maps.map(map => {
+        const sizeLabel = map.size >= 80 ? '超大' : map.size >= 50 ? '大' : map.size >= 30 ? '中' : '小';
+        return `
+            <div class="map-card" data-map-id="${map.id}">
+                <div class="map-thumb-mini ${map.id}">🗺️</div>
+                <div class="map-card-info">
+                    <h4>${map.name}</h4>
+                    <span class="map-card-size">${sizeLabel}地图 · ${map.size}×${map.size}</span>
+                </div>
             </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 
-    // 添加点击事件
+    // 点击地图卡片 -> 选中 + 更新预览
     mapListEl.querySelectorAll('.map-card').forEach(card => {
         card.addEventListener('click', () => {
-            selectedMapId = card.dataset.mapId;
+            // 高亮选中
+            mapListEl.querySelectorAll('.map-card').forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
 
-            // 根据游戏模式启动
-            if (gameMode === 'multiplayer') {
-                // 多人模式暂时使用默认地图
-                showScreen('room-list-screen');
-            } else {
-                startGame(gameMode === 'practice');
-            }
+            selectedMapId = card.dataset.mapId;
+            const mapData = maps.find(m => m.id === selectedMapId);
+            updateMapPreview(mapData);
+
+            // 启用开始按钮
+            document.getElementById('btn-start-map').disabled = false;
+        });
+    });
+
+    // 开始游戏按钮
+    document.getElementById('btn-start-map').addEventListener('click', () => {
+        if (!selectedMapId) return;
+
+        // 读取机器人数量
+        blueBotCount = parseInt(document.getElementById('blue-bot-input').value) || 0;
+        redBotCount = parseInt(document.getElementById('red-bot-input').value) || 0;
+
+        if (gameMode === 'multiplayer') {
+            showScreen('room-list-screen');
+        } else {
+            startGame(gameMode === 'practice');
+        }
+    });
+
+    // 初始化 ± 按钮
+    initializeBotCountControls();
+}
+
+// 更新地图预览面板（3D预览）
+function updateMapPreview(mapData) {
+    const previewEl = document.getElementById('map-preview');
+    const sizeLabel = mapData.size >= 80 ? '超大' : mapData.size >= 50 ? '大' : mapData.size >= 30 ? '中' : '小';
+
+    // 构建预览容器（3D canvas + 信息面板）
+    previewEl.innerHTML = `
+        <div class="map-preview-content">
+            <div id="map-preview-canvas" class="map-preview-canvas"></div>
+            <div class="map-preview-info">
+                <h3>${mapData.name}</h3>
+                <p>${mapData.description}</p>
+                <div class="map-meta">
+                    <span>📐 ${sizeLabel}地图 (${mapData.size}×${mapData.size})</span>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // 初始化或重用3D预览渲染器
+    const canvasContainer = document.getElementById('map-preview-canvas');
+
+    if (!mapPreviewRenderer) {
+        mapPreviewRenderer = new MapPreviewRenderer();
+        mapPreviewRenderer.init(canvasContainer);
+
+        // 监听窗口大小变化
+        window.addEventListener('resize', () => {
+            if (mapPreviewRenderer) mapPreviewRenderer.resize();
+        });
+    } else {
+        // 重新绑定到新容器
+        if (mapPreviewRenderer.canvas && canvasContainer) {
+            canvasContainer.appendChild(mapPreviewRenderer.canvas);
+            mapPreviewRenderer.container = canvasContainer;
+            mapPreviewRenderer.resize();
+        }
+    }
+
+    // 加载地图3D预览
+    mapPreviewRenderer.loadMap(mapData.id);
+}
+
+// 初始化机器人数量 ± 按钮
+function initializeBotCountControls() {
+    document.querySelectorAll('.bot-count-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const team = btn.dataset.team;
+            const dir = parseInt(btn.dataset.dir);
+            const inputId = team === 'blue' ? 'blue-bot-input' : 'red-bot-input';
+            const input = document.getElementById(inputId);
+            let val = parseInt(input.value) || 0;
+            val = Math.max(0, Math.min(20, val + dir));
+            input.value = val;
+        });
+    });
+
+    // 限制手动输入范围
+    ['blue-bot-input', 'red-bot-input'].forEach(id => {
+        document.getElementById(id).addEventListener('change', (e) => {
+            let val = parseInt(e.target.value) || 0;
+            val = Math.max(0, Math.min(20, val));
+            e.target.value = val;
         });
     });
 }
@@ -426,19 +518,25 @@ function saveSettings() {
 }
 
 async function startGame(practiceMode) {
+    // 清理3D预览渲染器
+    if (mapPreviewRenderer) {
+        mapPreviewRenderer.destroy();
+        mapPreviewRenderer = null;
+    }
+
     game = new Game();
 
     // 设置选择的地图
-    game.mapId = selectedMapId;
+    game.mapId = selectedMapId || 'fy_iceworld';
 
     try {
         await game.init();
 
         if (practiceMode) {
-            game.startPracticeMode();
+            game.startPracticeMode(blueBotCount, redBotCount);
         } else {
             game.start();
-            game.spawnBots(5);
+            game.spawnBots(blueBotCount, redBotCount);
         }
     } catch (error) {
         console.error('Failed to start game:', error);

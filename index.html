@@ -129,11 +129,51 @@
     <div id="map-select-screen" class="menu-screen hidden">
         <div class="map-select-container">
             <h2>选择地图</h2>
-            <div id="map-list" class="map-list">
-                <!-- 地图卡片将由JS动态生成 -->
-            </div>
-            <div class="menu-buttons" style="margin-top: 20px;">
-                <button id="btn-back-from-map" class="menu-btn">返回</button>
+            <div class="map-select-body">
+                <!-- 左侧：地图列表 -->
+                <div class="map-select-left">
+                    <div id="map-list" class="map-list">
+                        <!-- 地图卡片将由JS动态生成 -->
+                    </div>
+                </div>
+                <!-- 右侧：预览 + 设置 -->
+                <div class="map-select-right">
+                    <!-- 地图预览 -->
+                    <div id="map-preview" class="map-preview">
+                        <div class="map-preview-placeholder">← 请选择一张地图</div>
+                    </div>
+                    <!-- 机器人数量设置 -->
+                    <div class="bot-config-panel">
+                        <h3>机器人数量</h3>
+                        <div class="bot-config-row">
+                            <div class="bot-config-team blue">
+                                <span class="bot-team-icon">🔵</span>
+                                <label>蓝队 (队友)</label>
+                                <div class="bot-count-control">
+                                    <button class="bot-count-btn" data-team="blue" data-dir="-1">−</button>
+                                    <input type="number" id="blue-bot-input" class="bot-count-input" value="5" min="0"
+                                        max="20">
+                                    <button class="bot-count-btn" data-team="blue" data-dir="1">+</button>
+                                </div>
+                            </div>
+                            <div class="bot-config-team red">
+                                <span class="bot-team-icon">🔴</span>
+                                <label>红队 (敌人)</label>
+                                <div class="bot-count-control">
+                                    <button class="bot-count-btn" data-team="red" data-dir="-1">−</button>
+                                    <input type="number" id="red-bot-input" class="bot-count-input" value="5" min="0"
+                                        max="20">
+                                    <button class="bot-count-btn" data-team="red" data-dir="1">+</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 按钮 -->
+                    <div class="map-select-actions">
+                        <button id="btn-start-map" class="menu-btn primary" disabled>开始游戏</button>
+                        <button id="btn-back-from-map" class="menu-btn">返回</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -257,6 +297,7 @@
     <script src="js/player.js"></script>
     <script src="js/enemy.js"></script>
     <script src="js/map_configs.js"></script>
+    <script src="js/map_preview.js"></script>
     <script src="js/map.js"></script>
     <script src="js/hud.js"></script>
     <script src="js/buy_menu.js"></script>
