@@ -217,16 +217,19 @@ class Game {
                     break;
                 // CS 1.6 风格投掷物切换
                 case 'Digit4':
-                    this.player.selectGrenade('he_grenade');
-                    this.updateWeaponViewModel('he_grenade');
+                    if (this.player.selectGrenade('he_grenade')) {
+                        this.updateWeaponViewModel('he_grenade');
+                    }
                     break;
                 case 'Digit5':
-                    this.player.selectGrenade('flashbang');
-                    this.updateWeaponViewModel('flashbang');
+                    if (this.player.selectGrenade('flashbang')) {
+                        this.updateWeaponViewModel('flashbang');
+                    }
                     break;
                 case 'Digit6':
-                    this.player.selectGrenade('smoke');
-                    this.updateWeaponViewModel('smoke');
+                    if (this.player.selectGrenade('smoke')) {
+                        this.updateWeaponViewModel('smoke');
+                    }
                     break;
             }
         });
@@ -396,6 +399,12 @@ class Game {
 
         // 更新手雷物理
         this.updateGrenades();
+
+        // 更新闪光弹效果
+        this.updateFlashbangEffects();
+
+        // 更新烟雾弹效果
+        this.updateSmokeEffects();
 
         // 更新天气粒子
         if (this.map && this.map.updateWeather) {
@@ -688,6 +697,11 @@ class Game {
         // 播放投掷音效
         audioManager.play('reload'); // 临时使用reload音效
         this.hud.showCenterMessage(`投掷 ${this.getGrenadeName(grenadeData.type)}`, 1000);
+
+        // 如果扔完了最后一个投掷物，切换武器视图模型到主武器
+        if (!this.player.currentGrenade) {
+            this.updateWeaponViewModel();
+        }
     }
 
     getGrenadeName(type) {
@@ -703,50 +717,94 @@ class Game {
     updateGrenades() {
         if (!this.activeGrenades) return;
 
+        const grenadeRadius = 0.12;
+
         for (let i = this.activeGrenades.length - 1; i >= 0; i--) {
             const grenade = this.activeGrenades[i];
 
             // 应用重力
             grenade.velocity.y -= 15 * this.deltaTime;
 
-            // 计算下一帧位置
-            const movement = grenade.velocity.clone().multiplyScalar(this.deltaTime);
-            const newPos = grenade.position.clone().add(movement);
+            // 分步物理模拟：将大的移动分成小步，防止穿墙
+            const speed = grenade.velocity.length();
+            const stepCount = Math.max(1, Math.ceil(speed * this.deltaTime / grenadeRadius));
+            const subDt = this.deltaTime / stepCount;
 
-            // 墙壁碰撞检测
-            if (this.map && movement.length() > 0.001) {
-                const direction = movement.clone().normalize();
-                const distance = movement.length();
-                const wallHit = this.map.raycast(grenade.position, direction, distance + 0.15);
+            for (let step = 0; step < stepCount; step++) {
+                const movement = grenade.velocity.clone().multiplyScalar(subDt);
+                const newPos = grenade.position.clone().add(movement);
 
-                if (wallHit && wallHit.distance < distance + 0.1) {
-                    // 计算反弹方向
-                    const normal = wallHit.normal || new THREE.Vector3(0, 1, 0);
+                // 使用 map.checkCollision 进行墙壁碰撞检测
+                if (this.map && this.map.checkCollision) {
+                    const collResult = this.map.checkCollision(
+                        grenade.position,
+                        newPos,
+                        grenadeRadius
+                    );
 
-                    // 反射速度向量: v' = v - 2(v·n)n
-                    const dot = grenade.velocity.dot(normal);
-                    grenade.velocity.sub(normal.clone().multiplyScalar(2 * dot));
+                    if (collResult.hitWall) {
+                        // 计算推出方向作为碰撞法线
+                        const pushDir = collResult.position.clone().sub(newPos);
+                        pushDir.y = 0; // 只考虑水平方向
+                        const pushLen = pushDir.length();
 
-                    // 能量损失
-                    grenade.velocity.multiplyScalar(0.5);
+                        if (pushLen > 0.001) {
+                            const normal = pushDir.normalize();
 
-                    // 调整位置到碰撞点外
-                    newPos.copy(wallHit.point).add(normal.clone().multiplyScalar(0.15));
+                            // 反射速度向量: v' = v - 2(v·n)n
+                            const dot = grenade.velocity.dot(normal);
+                            if (dot < 0) { // 只在朝着墙移动时反射
+                                grenade.velocity.sub(normal.clone().multiplyScalar(2 * dot));
+                            }
+
+                            // 能量损失
+                            grenade.velocity.multiplyScalar(0.5);
+                            grenade.bounces++;
+                        }
+
+                        newPos.copy(collResult.position);
+                    }
+                }
+
+                // 额外的射线检测（捕获薄墙和高速穿透）
+                if (this.map && this.map.raycast && movement.length() > 0.001) {
+                    const direction = movement.clone().normalize();
+                    const distance = movement.length();
+                    const wallHit = this.map.raycast(grenade.position, direction, distance + grenadeRadius);
+
+                    if (wallHit && wallHit.distance < distance + grenadeRadius * 0.5) {
+                        const normal = wallHit.normal || new THREE.Vector3(0, 1, 0);
+
+                        const dot = grenade.velocity.dot(normal);
+                        if (dot < 0) {
+                            grenade.velocity.sub(normal.clone().multiplyScalar(2 * dot));
+                        }
+
+                        grenade.velocity.multiplyScalar(0.5);
+                        newPos.copy(wallHit.point).add(normal.clone().multiplyScalar(grenadeRadius));
+                        grenade.bounces++;
+                    }
+                }
+
+                // 地面碰撞
+                if (newPos.y < grenadeRadius) {
+                    newPos.y = grenadeRadius;
+                    grenade.velocity.y *= -0.4; // 弹跳
+                    grenade.velocity.x *= 0.7;
+                    grenade.velocity.z *= 0.7;
                     grenade.bounces++;
                 }
+
+                grenade.position.copy(newPos);
             }
 
-            // 地面碰撞
-            if (newPos.y < 0.1) {
-                newPos.y = 0.1;
-                grenade.velocity.y *= -0.4; // 弹跳
-                grenade.velocity.x *= 0.7;
-                grenade.velocity.z *= 0.7;
-                grenade.bounces++;
-            }
+            grenade.mesh.position.copy(grenade.position);
 
-            grenade.position.copy(newPos);
-            grenade.mesh.position.copy(newPos);
+            // 滚动摩擦力：贴近地面时减速
+            if (grenade.position.y < grenadeRadius + 0.05) {
+                grenade.velocity.x *= (1 - 2.0 * this.deltaTime);
+                grenade.velocity.z *= (1 - 2.0 * this.deltaTime);
+            }
 
             // 减少生命时间
             grenade.life -= this.deltaTime;
@@ -797,15 +855,12 @@ class Game {
                 break;
 
             case 'flashbang':
-                // 闪光弹效果 - 简化版：显示提示
-                this.hud.showCenterMessage('💥 闪光弹爆炸!', 500);
-                this.createExplosionEffect(grenade.position, 0xffffff);
+                this.handleFlashbangExplosion(grenade);
                 break;
 
             case 'smoke':
-                // 烟雾弹效果 - 简化版：显示提示
                 this.hud.showCenterMessage('💨 烟雾弹释放!', 1000);
-                this.createSmokeEffect(grenade.position);
+                this.createSmokeEffect(grenade.position.clone());
                 break;
         }
     }
@@ -840,36 +895,349 @@ class Game {
         animate();
     }
 
-    // 烟雾效果
-    createSmokeEffect(position) {
-        const geometry = new THREE.SphereGeometry(2, 16, 16);
-        const material = new THREE.MeshBasicMaterial({
-            color: 0x888888,
-            transparent: true,
-            opacity: 0.6
+    // 闪光弹爆炸处理
+    handleFlashbangExplosion(grenade) {
+        const flashRadius = 20;  // 闪光有效范围
+
+        // 视觉效果
+        this.createExplosionEffect(grenade.position, 0xffffff);
+        audioManager.playFlashbangBang();
+
+        // ---- 对玩家的影响 ----
+        if (this.player && this.player.isAlive) {
+            const dist = this.player.position.distanceTo(grenade.position);
+
+            if (dist < flashRadius && dist > 0.1) {
+                // 视线检查：闪光弹到玩家之间是否有墙壁遮挡
+                if (this.map && this.map.raycast) {
+                    const dirToPlayer = this.player.position.clone().sub(grenade.position).normalize();
+                    const wallHit = this.map.raycast(grenade.position, dirToPlayer, dist);
+                    if (wallHit && wallHit.distance < dist - 0.5) {
+                        // 墙壁完全遮挡，不受影响
+                        return;
+                    }
+                }
+
+                // 距离衰减 — 使用平方根曲线，近距离效果更强，中远距离衰减更缓
+                let intensity = Math.pow(1 - (dist / flashRadius), 0.6);
+
+                // 朝向衰减：面对闪光弹时效果更强
+                const lookDir = new THREE.Vector3(0, 0, -1);
+                lookDir.applyQuaternion(this.player.camera.quaternion);
+                const toFlash = grenade.position.clone().sub(this.player.position).normalize();
+                const facingDot = lookDir.dot(toFlash);
+                // facingDot: 1=正对, -1=背对
+                // 背对时效果衰减到50%（闪光弹即使背对也很强）
+                const facingFactor = 0.5 + 0.5 * Math.max(0, facingDot);
+                intensity *= facingFactor;
+
+                // 最小阈值
+                if (intensity > 0.05) {
+                    const duration = 7 + intensity * 5; // 7~12 秒
+
+                    // 失明：白屏 overlay
+                    const overlay = document.getElementById('flashbang-overlay');
+                    if (overlay) {
+                        overlay.style.opacity = Math.min(1, intensity * 1.5);
+                    }
+
+                    // 失聪：压低游戏音效
+                    audioManager.setMuffled(true, duration);
+
+                    // 耳鸣
+                    audioManager.playTinnitus(duration);
+
+                    // 设置闪光弹效果状态（用于眩晕抖动）
+                    this.flashbangEffect = {
+                        duration: duration,
+                        remaining: duration,
+                        intensity: intensity,
+                        initialOpacity: Math.min(1, intensity * 1.5)
+                    };
+                }
+            }
+        }
+
+        // ---- 对 Bot 的影响：范围内暂停行动 ----
+        const allBots = [...this.enemies, ...this.allies];
+        allBots.forEach(bot => {
+            if (!bot.isAlive) return;
+            const dist = bot.position.distanceTo(grenade.position);
+            if (dist < flashRadius && dist > 0.1) {
+                // 视线检查：闪光弹到Bot之间是否有墙壁遮挡
+                if (this.map && this.map.raycast) {
+                    const dirToBot = bot.position.clone().sub(grenade.position).normalize();
+                    const wallHit = this.map.raycast(grenade.position, dirToBot, dist);
+                    if (wallHit && wallHit.distance < dist - 0.5) {
+                        return; // 墙壁遮挡，不受影响
+                    }
+                }
+
+                const intensity = Math.pow(1 - (dist / flashRadius), 0.6);
+                const stunTime = 5 + intensity * 7; // 5~12 秒
+                bot.stunTime = stunTime;
+                // 保存原始状态，让 bot 暂停行动
+                if (!bot._originalState) {
+                    bot._originalState = bot.state;
+                }
+                bot.state = 'stunned';
+            }
         });
-        const smoke = new THREE.Mesh(geometry, material);
-        smoke.position.copy(position);
-        smoke.position.y += 1;
-        this.scene.add(smoke);
+    }
 
-        // 5秒后消散
-        let life = 5;
-        const fadeOut = () => {
-            life -= 0.016;
-            if (life < 1) {
-                material.opacity = life * 0.6;
-            }
+    // 更新闪光弹效果（每帧调用）
+    updateFlashbangEffects() {
+        if (!this.flashbangEffect) return;
 
-            if (life > 0) {
-                requestAnimationFrame(fadeOut);
+        const effect = this.flashbangEffect;
+        effect.remaining -= this.deltaTime;
+
+        if (effect.remaining <= 0) {
+            // 效果结束，清理
+            const overlay = document.getElementById('flashbang-overlay');
+            if (overlay) overlay.style.opacity = 0;
+            this.flashbangEffect = null;
+            return;
+        }
+
+        // 渐变淡出白屏
+        const progress = effect.remaining / effect.duration;
+        const overlay = document.getElementById('flashbang-overlay');
+        if (overlay) {
+            // 前40%时间保持高亮，之后逐渐淡出
+            if (progress > 0.6) {
+                overlay.style.opacity = effect.initialOpacity;
             } else {
-                this.scene.remove(smoke);
-                geometry.dispose();
-                material.dispose();
+                overlay.style.opacity = effect.initialOpacity * (progress / 0.6);
             }
-        };
-        setTimeout(fadeOut, 4000);
+        }
+
+        // 眩晕相机抖动
+        if (this.player && this.player.isAlive) {
+            const shakeIntensity = effect.intensity * progress * 0.025;
+            this.player.recoilOffset.x += (Math.random() - 0.5) * shakeIntensity;
+            this.player.recoilOffset.y += (Math.random() - 0.5) * shakeIntensity;
+        }
+
+        // 更新 Bot 眩晕状态
+        const allBots = [...this.enemies, ...this.allies];
+        allBots.forEach(bot => {
+            if (bot.stunTime && bot.stunTime > 0) {
+                bot.stunTime -= this.deltaTime;
+                if (bot.stunTime <= 0) {
+                    bot.stunTime = 0;
+                    // 恢复原始状态
+                    if (bot._originalState) {
+                        bot.state = bot._originalState;
+                        bot._originalState = null;
+                    } else {
+                        bot.state = 'patrol';
+                    }
+                }
+            }
+        });
+    }
+
+    // 生成烟雾粒子纹理（Canvas soft circle）
+    _createSmokeTexture() {
+        if (this._smokeTexture) return this._smokeTexture;
+
+        const size = 128;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // 径向渐变：中心不透明，边缘完全透明
+        const gradient = ctx.createRadialGradient(
+            size / 2, size / 2, 0,
+            size / 2, size / 2, size / 2
+        );
+        gradient.addColorStop(0, 'rgba(200, 200, 195, 1.0)');
+        gradient.addColorStop(0.3, 'rgba(190, 190, 185, 0.8)');
+        gradient.addColorStop(0.6, 'rgba(180, 180, 175, 0.4)');
+        gradient.addColorStop(0.85, 'rgba(170, 170, 165, 0.1)');
+        gradient.addColorStop(1.0, 'rgba(160, 160, 155, 0.0)');
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+        this._smokeTexture = texture;
+        return texture;
+    }
+
+    // 烟雾效果 - Sprite 粒子系统
+    createSmokeEffect(position) {
+        if (!this.activeSmokeEffects) {
+            this.activeSmokeEffects = [];
+        }
+
+        const smokeRadius = 8;
+        const particleCount = 120;
+        const spreadTime = 2.0;
+        const holdTime = 15.0;
+        const fadeTime = 3.0;
+        const totalLife = spreadTime + holdTime + fadeTime;
+
+        const texture = this._createSmokeTexture();
+        const particles = [];
+        const group = new THREE.Group();
+        group.position.copy(position);
+        group.position.y = 0.1;
+        this.scene.add(group);
+
+        for (let i = 0; i < particleCount; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const distFactor = Math.pow(Math.random(), 0.4); // 中心更密集
+            const targetDist = distFactor * smokeRadius;
+
+            // Sprite 大小：中心更大，边缘更小
+            const spriteScale = 3.0 + (1 - distFactor) * 5.0; // 3~8
+
+            const material = new THREE.SpriteMaterial({
+                map: texture,
+                transparent: true,
+                opacity: 0,
+                depthWrite: false,
+                blending: THREE.NormalBlending,
+                color: new THREE.Color(
+                    0.72 + Math.random() * 0.08,
+                    0.72 + Math.random() * 0.08,
+                    0.70 + Math.random() * 0.06
+                )
+            });
+
+            const sprite = new THREE.Sprite(material);
+            sprite.scale.set(spriteScale, spriteScale, 1);
+            sprite.position.set(
+                (Math.random() - 0.5) * 0.5,
+                0.5 + Math.random() * 0.5,
+                (Math.random() - 0.5) * 0.5
+            );
+            group.add(sprite);
+
+            // 目标位置
+            const targetX = Math.cos(angle) * targetDist;
+            const targetZ = Math.sin(angle) * targetDist;
+            const targetY = 0.3 + Math.random() * 3.0 + (1 - distFactor) * 2.0;
+
+            // 中心浓度最高（不透明），边缘浓度低
+            const maxOpacity = Math.max(0.1, 1.0 - distFactor * 0.9);
+
+            particles.push({
+                sprite,
+                material,
+                targetX,
+                targetZ,
+                targetY,
+                spriteScale,
+                maxOpacity,
+                delay: Math.random() * 0.8,
+                drift: {
+                    x: (Math.random() - 0.5) * 0.2,
+                    z: (Math.random() - 0.5) * 0.2,
+                    y: (Math.random() - 0.5) * 0.05
+                },
+                rotSpeed: (Math.random() - 0.5) * 0.3, // 缓慢旋转
+                growFactor: 0.98 + Math.random() * 0.04  // 缓慢变大
+            });
+        }
+
+        this.activeSmokeEffects.push({
+            group,
+            particles,
+            center: position.clone(),
+            radius: smokeRadius,
+            life: totalLife,
+            maxLife: totalLife,
+            spreadTime,
+            holdTime,
+            fadeTime
+        });
+    }
+
+    // 更新烟雾效果（每帧调用）
+    updateSmokeEffects() {
+        if (!this.activeSmokeEffects) return;
+
+        // 更新全局烟雾区域信息（供 Bot AI 视线检查）
+        window.activeSmokeZones = this.activeSmokeEffects
+            .filter(s => (s.maxLife - s.life) > s.spreadTime * 0.5) // 扩散到一半后才生效
+            .map(s => ({ center: s.center, radius: s.radius }));
+
+        for (let i = this.activeSmokeEffects.length - 1; i >= 0; i--) {
+            const smoke = this.activeSmokeEffects[i];
+            smoke.life -= this.deltaTime;
+
+            if (smoke.life <= 0) {
+                // 清理
+                smoke.particles.forEach(p => {
+                    smoke.group.remove(p.sprite);
+                    p.material.dispose();
+                });
+                this.scene.remove(smoke.group);
+                this.activeSmokeEffects.splice(i, 1);
+                continue;
+            }
+
+            const elapsed = smoke.maxLife - smoke.life;
+
+            smoke.particles.forEach(p => {
+                const particleElapsed = Math.max(0, elapsed - p.delay);
+
+                if (elapsed < smoke.spreadTime) {
+                    // 扩散阶段
+                    const spreadProgress = Math.min(1, particleElapsed / smoke.spreadTime);
+                    const eased = 1 - Math.pow(1 - spreadProgress, 3);
+
+                    p.sprite.position.x = p.targetX * eased + p.drift.x * elapsed;
+                    p.sprite.position.z = p.targetZ * eased + p.drift.z * elapsed;
+                    p.sprite.position.y = p.targetY * eased;
+
+                    // 透明度渐变出现
+                    p.material.opacity = p.maxOpacity * Math.min(1, spreadProgress * 2.5);
+
+                    // 扩散时粒子逐渐变大
+                    const growScale = p.spriteScale * (0.6 + 0.4 * eased);
+                    p.sprite.scale.set(growScale, growScale, 1);
+
+                } else if (smoke.life > smoke.fadeTime) {
+                    // 保持阶段：缓慢漂移 + 缓慢膨胀
+                    p.sprite.position.x += p.drift.x * this.deltaTime;
+                    p.sprite.position.z += p.drift.z * this.deltaTime;
+                    p.sprite.position.y += p.drift.y * this.deltaTime;
+
+                    // 微微起伏
+                    const wobble = Math.sin(elapsed * 0.3 + p.delay * 10) * 0.015;
+                    p.sprite.position.y += wobble;
+
+                    // 缓慢膨胀
+                    const currentScale = p.sprite.scale.x * (1 + 0.002 * this.deltaTime);
+                    p.sprite.scale.set(currentScale, currentScale, 1);
+
+                    p.material.opacity = p.maxOpacity;
+
+                } else {
+                    // 淡出阶段
+                    const fadeProgress = smoke.life / smoke.fadeTime;
+
+                    // 继续漂移 + 上升消散
+                    p.sprite.position.x += p.drift.x * this.deltaTime * 1.5;
+                    p.sprite.position.z += p.drift.z * this.deltaTime * 1.5;
+                    p.sprite.position.y += 0.4 * this.deltaTime;
+
+                    // 继续膨胀变淡
+                    const currentScale = p.sprite.scale.x * (1 + 0.01 * this.deltaTime);
+                    p.sprite.scale.set(currentScale, currentScale, 1);
+
+                    // 边缘先消失，中心后消失
+                    const edgeFactor = p.maxOpacity < 0.4 ? fadeProgress * fadeProgress : fadeProgress;
+                    p.material.opacity = p.maxOpacity * edgeFactor;
+                }
+            });
+        }
     }
 
     // 创建子弹弹道线

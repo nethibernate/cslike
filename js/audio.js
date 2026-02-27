@@ -13,8 +13,19 @@ class AudioManager {
         try {
             this.context = new (window.AudioContext || window.webkitAudioContext)();
             this.masterGain = this.context.createGain();
-            this.masterGain.connect(this.context.destination);
+
+            // 音量压低滤波器（闪光弹失聪效果）
+            this.muffleFilter = this.context.createBiquadFilter();
+            this.muffleFilter.type = 'lowpass';
+            this.muffleFilter.frequency.value = 20000; // 正常时不过滤
+
+            this.masterGain.connect(this.muffleFilter);
+            this.muffleFilter.connect(this.context.destination);
             this.masterGain.gain.value = CONFIG.settings.volume;
+
+            // 耳鸣状态
+            this.tinnitusOsc = null;
+            this.tinnitusGain = null;
 
             // 生成合成音效
             this.generateSounds();
@@ -246,6 +257,86 @@ class AudioManager {
     resume() {
         if (this.context && this.context.state === 'suspended') {
             this.context.resume();
+        }
+    }
+
+    // 闪光弹爆炸声
+    playFlashbangBang() {
+        if (!this.context) return;
+
+        // 短促的白噪声爆炸
+        const bufferSize = this.context.sampleRate * 0.15;
+        const buffer = this.context.createBuffer(1, bufferSize, this.context.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+        }
+
+        const source = this.context.createBufferSource();
+        source.buffer = buffer;
+
+        const gain = this.context.createGain();
+        gain.gain.setValueAtTime(0.5, this.context.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.context.currentTime + 0.15);
+
+        source.connect(gain);
+        gain.connect(this.masterGain);
+        source.start();
+    }
+
+    // 耳鸣效果
+    playTinnitus(duration) {
+        if (!this.context) return;
+
+        this.stopTinnitus();
+
+        this.tinnitusOsc = this.context.createOscillator();
+        this.tinnitusGain = this.context.createGain();
+
+        this.tinnitusOsc.type = 'sine';
+        this.tinnitusOsc.frequency.value = 3500;
+
+        // 耳鸣音量：先快速升高，然后缓慢淡出
+        this.tinnitusGain.gain.setValueAtTime(0, this.context.currentTime);
+        this.tinnitusGain.gain.linearRampToValueAtTime(0.25, this.context.currentTime + 0.1);
+        this.tinnitusGain.gain.setValueAtTime(0.25, this.context.currentTime + duration * 0.3);
+        this.tinnitusGain.gain.exponentialRampToValueAtTime(0.001, this.context.currentTime + duration);
+
+        // 耳鸣直连输出（不经过 muffleFilter，因为它不应该被消音）
+        this.tinnitusOsc.connect(this.tinnitusGain);
+        this.tinnitusGain.connect(this.context.destination);
+
+        this.tinnitusOsc.start();
+        this.tinnitusOsc.stop(this.context.currentTime + duration);
+
+        // 自动清理
+        this.tinnitusOsc.onended = () => {
+            this.tinnitusOsc = null;
+            this.tinnitusGain = null;
+        };
+    }
+
+    // 停止耳鸣
+    stopTinnitus() {
+        if (this.tinnitusOsc) {
+            try { this.tinnitusOsc.stop(); } catch (e) { }
+            this.tinnitusOsc = null;
+            this.tinnitusGain = null;
+        }
+    }
+
+    // 设置失聪效果（音频压低）
+    setMuffled(enabled, duration = 3) {
+        if (!this.muffleFilter) return;
+
+        if (enabled) {
+            // 压低所有游戏音效到闷声
+            this.muffleFilter.frequency.cancelScheduledValues(this.context.currentTime);
+            this.muffleFilter.frequency.setValueAtTime(300, this.context.currentTime);
+            this.muffleFilter.frequency.exponentialRampToValueAtTime(20000, this.context.currentTime + duration);
+        } else {
+            this.muffleFilter.frequency.cancelScheduledValues(this.context.currentTime);
+            this.muffleFilter.frequency.setValueAtTime(20000, this.context.currentTime);
         }
     }
 }

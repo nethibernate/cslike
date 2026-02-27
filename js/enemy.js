@@ -139,6 +139,14 @@ class Bot {
     update(deltaTime, targets, allies, collisionCallback) {
         if (!this.isAlive) return;
 
+        // 闪光弹致盲：暂停AI和移动
+        if (this.state === 'stunned') {
+            this.velocity.set(0, 0, 0);
+            this.isMoving = false;
+            this.updateMeshPosition();
+            return;
+        }
+
         // 更新武器
         if (this.weapon) {
             this.weapon.updateSpread(deltaTime);
@@ -683,6 +691,34 @@ class Bot {
 
                     if (wallHit3 && wallHit3.distance < feetDist - 0.5) {
                         return false;  // 三个点都被遮挡，确定看不到
+                    }
+                }
+            }
+        }
+
+        // 烟雾遮挡检查：视线穿过烟雾区域时无法看到目标
+        if (window.activeSmokeZones && window.activeSmokeZones.length > 0) {
+            for (const smoke of window.activeSmokeZones) {
+                // 计算视线段到烟雾中心的最近距离
+                const lineDir = targetPos.clone().sub(myEyePos);
+                const lineLen = lineDir.length();
+                lineDir.normalize();
+
+                const toSmoke = smoke.center.clone().sub(myEyePos);
+                const proj = toSmoke.dot(lineDir);
+
+                // 投影点必须在线段内
+                if (proj < 0 || proj > lineLen) continue;
+
+                const closestPoint = myEyePos.clone().add(lineDir.clone().multiplyScalar(proj));
+                const distToCenter = closestPoint.distanceTo(smoke.center);
+
+                if (distToCenter < smoke.radius) {
+                    // 视线穿过烟雾区域
+                    // 中心完全遮挡，边缘有概率看到
+                    const density = 1 - (distToCenter / smoke.radius);
+                    if (density > 0.3 || Math.random() < density) {
+                        return false; // 被烟雾遮挡
                     }
                 }
             }
